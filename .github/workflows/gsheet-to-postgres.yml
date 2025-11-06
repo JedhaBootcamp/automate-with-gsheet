@@ -1,0 +1,69 @@
+name: Run ETL workflow
+
+on:
+  # ──────────────────────────────────────────────────────────────
+  # Manual trigger (from the "Actions" tab in GitHub)
+  # ──────────────────────────────────────────────────────────────
+  workflow_dispatch:
+
+  # ──────────────────────────────────────────────────────────────
+  # Scheduled trigger (disabled for now)
+  #
+  # Uncomment the following lines if you want your ETL
+  # to run automatically once per day at 03:00 UTC.
+  #
+  # schedule:
+  #   - cron: "0 3 * * *"
+  #
+  # Note:
+  #   - GitHub Actions uses UTC timezone for cron jobs.
+  #   - Adjust the time if needed (e.g., "0 2 * * *" = 3 AM CET).
+  # ──────────────────────────────────────────────────────────────
+
+
+jobs:
+  etl:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Prepare Google service account key
+        # We store the full JSON as a secret and write it to a temp file.
+        # Then we export GOOGLE_SA_KEY_PATH so etl.py can read it.
+        run: |
+          KEY_PATH="$RUNNER_TEMP/google_sa.json"
+          printf '%s' "${GOOGLE_SERVICE_ACCOUNT_JSON}" > "$KEY_PATH"
+          echo "GOOGLE_SA_KEY_PATH=$KEY_PATH" >> $GITHUB_ENV
+        env:
+          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+
+      - name: Run ETL
+        env:
+          # Google Sheets config (all from secrets)
+          SHEET_ID: ${{ secrets.SHEET_ID }}
+          WORKSHEET: ${{ secrets.WORKSHEET }}
+          # GOOGLE_SA_KEY_PATH is set in $GITHUB_ENV above
+
+          # PostgreSQL config (all from secrets)
+          PG_USER: ${{ secrets.PG_USER }}
+          PG_PASSWORD: ${{ secrets.PG_PASSWORD }}
+          PG_HOST: ${{ secrets.PG_HOST }}
+          PG_PORT: ${{ secrets.PG_PORT }}
+          PG_DB: ${{ secrets.PG_DB }}
+          PG_TABLE: ${{ secrets.PG_TABLE }}
+          PG_IF_EXISTS: ${{ secrets.PG_IF_EXISTS }}
+          PG_CHUNKSIZE: ${{ secrets.PG_CHUNKSIZE }}
+        run: |
+          echo "🚀 Launching ETL pipeline..."
+          python etl.py
+          echo "✅ ETL finished successfully!"

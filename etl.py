@@ -1,40 +1,135 @@
+#!/usr/bin/env python3
+"""
+Simple ETL: Google Sheets -> PostgreSQL
+
+- Authenticates to Google Sheets via a Service Account JSON (provided via env var)
+- Reads a worksheet into a pandas DataFrame
+- Loads the data into a PostgreSQL table
+
+Environment variables:
+  SHEET_ID
+  WORKSHEET
+  GOOGLE_SA_KEY_JSON   # full JSON content stored as a GitHub Secret
+  PG_USER
+  PG_PASSWORD
+  PG_HOST
+  PG_PORT
+  PG_DB
+  PG_TABLE -> Provide whatever name you want
+"""
+
+import os
+import json
+import logging
+from typing import Optional
+
 import pandas as pd
 import gspread
 from google.oauth2.service_account import Credentials
 from sqlalchemy import create_engine
+from sqlalchemy.engine import Engine
 
-# --- Config ---
-SHEET_ID = "1npJZrNb30OgCpLTNEVwSQw1T6QqdQvdPbEDp8s3iNcg"   # from the URL: /spreadsheets/d/<THIS>/edit
-WORKSHEET = "Sheet1"               # name of the tab you want to read
+# ─── Logging ──────────────────────────────────────────────────────────────────
+logging.basicConfig(
+    level=os.getenv("LOG_LEVEL", "INFO"),
+    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+)
+logger = logging.getLogger("etl")
 
-# --- Authenticate using your service account JSON ---
-SCOPES = [
-    "https://www.googleapis.com/auth/spreadsheets",
-    "https://www.googleapis.com/auth/drive",
-]
+# ─── Config helpers ───────────────────────────────────────────────────────────
+def env(key: str, default: Optional[str] = None) -> str:
+    val = os.getenv(key, default)
+    if val is None:
+        raise RuntimeError(f"Missing required environment variable: {key}")
+    return val
 
-PATH_TO_JSON="extra/dafs-m07d07-ex01-4e4c15593bd1.json" # REPLACE WITH YOUR SERVICE ACCOUNT KEY FILE
+def build_pg_url(user: str, password: str, host: str, port: str, db: str) -> str:
+    return f"postgresql://{user}:{password}@{host}:{port}/{db}"
 
-creds = Credentials.from_service_account_file(PATH_TO_JSON, scopes=SCOPES)
-gc = gspread.authorize(creds)
+# ─── Google Sheets ────────────────────────────────────────────────────────────
+def read_worksheet(sheet_id: str, worksheet: str, sa_json: str) -> pd.DataFrame:
+    """Return the worksheet content as a DataFrame."""
+    logger.info("Authenticating to Google Sheets using inline service account JSON.")
+    scopes = [
+        "https://www.googleapis.com/auth/spreadsheets",
+        "https://www.googleapis.com/auth/drive",
+    ]
+    creds_info = json.loads(sa_json)
+    creds = Credentials.from_service_account_info(creds_info, scopes=scopes)
+    gc = gspread.authorize(creds)
 
-# --- Open the sheet ---
-sh = gc.open_by_key(SHEET_ID)
-ws = sh.worksheet(WORKSHEET)
+    logger.info("Opening spreadsheet %s (worksheet=%s).", sheet_id, worksheet)
+    sh = gc.open_by_key(sheet_id)
+    ws = sh.worksheet(worksheet)
 
-# --- Read data into pandas ---
-records = ws.get_all_records()     # gets all rows as list of dicts (first row = headers)
-df = pd.DataFrame(records)
+    logger.info("Fetching records from worksheet…")
+    records = ws.get_all_records()  # first row = headers
+    df = pd.DataFrame(records)
 
-# Replace these credentials with your own PostgreSQL / RDS instance
-DB_USER = "postgres"
-DB_PASSWORD = "postgres"
-DB_HOST = "host.docker.internal" # ⚠️ THIS IS IMPORTANT. Use that if you are running your notebook inside another container, otherwise you can use localhost
-DB_PORT = "5432"
-DB_NAME = "finance"
+    if df.empty:
+        logger.warning("Worksheet is empty. Nothing to load.")
+    else:
+        logger.info("Pulled %d rows × %d columns.", df.shape[0], df.shape[1])
 
-# Create a connection engine
-engine = create_engine(f"postgresql://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}")
+    return df
 
-# Load the dataframe into a new table called "pnl"
-df.to_sql("pnl", engine, if_exists="replace", index=False)
+# ─── Database load ────────────────────────────────────────────────────────────
+def get_engine(pg_url: str) -> Engine:
+    logger.info("Creating SQLAlchemy engine.")
+    return create_engine(pg_url)
+
+def load_dataframe(
+    df: pd.DataFrame,
+    engine: Engine,
+    table: str,
+    if_exists: str = "replace",
+    chunksize: Optional[int] = 1000,
+) -> None:
+    """Write the DataFrame to PostgreSQL."""
+    if df.empty:
+        logger.info("Skip loading: DataFrame is empty.")
+        return
+
+    logger.info(
+        "Loading DataFrame into table '%s' (if_exists=%s, chunksize=%s)…",
+        table, if_exists, chunksize,
+    )
+    df.to_sql(
+        table,
+        engine,
+        if_exists=if_exists,
+        index=False,
+        chunksize=chunksize,
+        method="multi",
+    )
+    logger.info("Load completed.")
+
+# ─── Main orchestrator ────────────────────────────────────────────────────────
+def main() -> None:
+    sheet_id = env("SHEET_ID")
+    worksheet = env("WORKSHEET")
+    sa_json = env("GOOGLE_SA_KEY_JSON")
+
+    pg_user = env("PG_USER")
+    pg_password = env("PG_PASSWORD")
+    pg_host = env("PG_HOST")
+    pg_port = env("PG_PORT")
+    pg_db = env("PG_DB")
+    pg_table = env("PG_TABLE")
+    pg_if_exists = env("PG_IF_EXISTS", "replace")
+    pg_chunksize_str = env("PG_CHUNKSIZE", "1000")
+
+    try:
+        pg_chunksize = int(pg_chunksize_str) if pg_chunksize_str else None
+    except ValueError:
+        raise RuntimeError("PG_CHUNKSIZE must be an integer or empty.")
+
+    # Extract
+    df = read_worksheet(sheet_id, worksheet, sa_json)
+
+    # Load
+    engine = get_engine(build_pg_url(pg_user, pg_password, pg_host, pg_port, pg_db))
+    load_dataframe(df, engine, pg_table, if_exists=pg_if_exists, chunksize=pg_chunksize)
+
+if __name__ == "__main__":
+    main()
