@@ -116,8 +116,8 @@ def main() -> None:
     pg_port = env("PG_PORT")
     pg_db = env("PG_DB")
     pg_table = env("PG_TABLE")
-    pg_if_exists = env("PG_IF_EXISTS", "replace")
-    pg_chunksize_str = env("PG_CHUNKSIZE", "1000")
+    pg_if_exists = "replace"
+    pg_chunksize_str = "1000"
 
     try:
         pg_chunksize = int(pg_chunksize_str) if pg_chunksize_str else None
