@@ -48,8 +48,6 @@ jobs:
           PG_PORT: ${{ secrets.PG_PORT }}
           PG_DB: ${{ secrets.PG_DB }}
           PG_TABLE: ${{ secrets.PG_TABLE }}
-          PG_IF_EXISTS: ${{ secrets.PG_IF_EXISTS }}
-          PG_CHUNKSIZE: ${{ secrets.PG_CHUNKSIZE }}
         run: |
           echo "🚀 Launching ETL pipeline..."
           python etl.py

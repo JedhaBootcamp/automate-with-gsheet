@@ -1,6 +1,5 @@
-pandas 
-gspread 
+pandas
+gspread
 google-auth
 sqlalchemy
-typing
-psycopg2
+psycopg2-binary
