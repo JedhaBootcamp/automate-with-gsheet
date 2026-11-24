@@ -1,0 +1,7 @@
+# Secrets: never commit your service account key or your .env file
+*.json
+.env
+
+# Python
+__pycache__/
+.venv/
