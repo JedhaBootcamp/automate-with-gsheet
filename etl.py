@@ -44,7 +44,9 @@ def env(key: str, default: Optional[str] = None) -> str:
     return val
 
 def build_pg_url(user: str, password: str, host: str, port: str, db: str) -> str:
-    return f"postgresql://{user}:{password}@{host}:{port}/{db}"
+    # "+psycopg2" names the driver: since SQLAlchemy 2.1, "postgresql://" alone
+    # looks for psycopg 3 and fails with "No module named 'psycopg'"
+    return f"postgresql+psycopg2://{user}:{password}@{host}:{port}/{db}"
 
 # ─── Google Sheets ────────────────────────────────────────────────────────────
 def read_worksheet(sheet_id: str, worksheet: str, sa_json: str) -> pd.DataFrame:
